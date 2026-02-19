@@ -63,16 +63,13 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.header.Header;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-// TODO ddimitrov This continues being way too flaky.
-//  Until we fix it (KREST-1542), we should ignore it, as it might be hiding even worse errors.
-@Ignore
 @RunWith(JUnit4.class)
 public class ProduceActionIntegrationTest {
 
@@ -86,6 +83,7 @@ public class ProduceActionIntegrationTest {
   @Before
   public void setUp() throws Exception {
     testEnv.kafkaCluster().createTopic(TOPIC_NAME, 3, (short) 1);
+    Thread.sleep(1000);
   }
 
   @Test
@@ -2953,6 +2951,760 @@ public class ProduceActionIntegrationTest {
 
     ErrorResponse actual = response.readEntity(ErrorResponse.class);
     assertEquals(400, actual.getErrorCode());
+  }
+
+  @Test
+  public void produceJsonWithPartitionId() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    int partitionId = 2;
+    String key = "foo";
+    String value = "bar";
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setPartitionId(partitionId)
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.JSON)
+                    .setData(TextNode.valueOf(key))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.JSON)
+                    .setData(TextNode.valueOf(value))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    assertEquals(partitionId, actual.getPartitionId());
+    KafkaJsonDeserializer<Object> deserializer = new KafkaJsonDeserializer<>();
+    deserializer.configure(emptyMap(), false);
+    ConsumerRecord<Object, Object> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                partitionId,
+                actual.getOffset(),
+                deserializer,
+                deserializer);
+    assertEquals(key, produced.key());
+    assertEquals(value, produced.value());
+  }
+
+  @Test
+  public void produceBinaryWithPartitionIdAllPartitions() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    for (int partitionId = 0; partitionId < 3; partitionId++) {
+      ByteString key = ByteString.copyFromUtf8("key-p" + partitionId);
+      ByteString value = ByteString.copyFromUtf8("value-p" + partitionId);
+      ProduceRequest request =
+          ProduceRequest.builder()
+              .setPartitionId(partitionId)
+              .setKey(
+                  ProduceRequestData.builder()
+                      .setFormat(EmbeddedFormat.BINARY)
+                      .setData(BinaryNode.valueOf(key.toByteArray()))
+                      .build())
+              .setValue(
+                  ProduceRequestData.builder()
+                      .setFormat(EmbeddedFormat.BINARY)
+                      .setData(BinaryNode.valueOf(value.toByteArray()))
+                      .build())
+              .build();
+
+      Response response =
+          testEnv.kafkaRest()
+              .target()
+              .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+              .request()
+              .accept(MediaType.APPLICATION_JSON)
+              .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+      assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+      ProduceResponse actual = readProduceResponse(response);
+      assertEquals(partitionId, actual.getPartitionId());
+      ConsumerRecord<byte[], byte[]> produced =
+          testEnv.kafkaCluster()
+              .getRecord(
+                  TOPIC_NAME,
+                  partitionId,
+                  actual.getOffset(),
+                  new ByteArrayDeserializer(),
+                  new ByteArrayDeserializer());
+      assertEquals(key, ByteString.copyFrom(produced.key()));
+      assertEquals(value, ByteString.copyFrom(produced.value()));
+    }
+  }
+
+  @Test
+  public void produceJsonWithTimestamp() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    Instant timestamp = Instant.ofEpochMilli(1000);
+    String key = "foo";
+    String value = "bar";
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.JSON)
+                    .setData(TextNode.valueOf(key))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.JSON)
+                    .setData(TextNode.valueOf(value))
+                    .build())
+            .setTimestamp(timestamp)
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    KafkaJsonDeserializer<Object> deserializer = new KafkaJsonDeserializer<>();
+    deserializer.configure(emptyMap(), false);
+    ConsumerRecord<Object, Object> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                deserializer,
+                deserializer);
+    assertEquals(key, produced.key());
+    assertEquals(value, produced.value());
+    assertEquals(timestamp, Instant.ofEpochMilli(produced.timestamp()));
+  }
+
+  @Test
+  public void produceBinaryWithZeroTimestamp() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    Instant timestamp = Instant.ofEpochMilli(0);
+    ByteString key = ByteString.copyFromUtf8("foo");
+    ByteString value = ByteString.copyFromUtf8("bar");
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .setTimestamp(timestamp)
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    assertEquals(timestamp, Instant.ofEpochMilli(produced.timestamp()));
+  }
+
+  @Test
+  public void produceBinaryWithFutureTimestamp() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    Instant timestamp = Instant.ofEpochMilli(4102444800000L);
+    ByteString key = ByteString.copyFromUtf8("foo");
+    ByteString value = ByteString.copyFromUtf8("bar");
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .setTimestamp(timestamp)
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    assertEquals(timestamp, Instant.ofEpochMilli(produced.timestamp()));
+  }
+
+  @Test
+  public void produceBinaryWithEmptyHeaders() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    ByteString key = ByteString.copyFromUtf8("foo");
+    ByteString value = ByteString.copyFromUtf8("bar");
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setHeaders(ImmutableList.of())
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    assertEquals(0, produced.headers().toArray().length);
+  }
+
+  @Test
+  public void produceBinaryWithNullHeaderValue() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    ByteString key = ByteString.copyFromUtf8("foo");
+    ByteString value = ByteString.copyFromUtf8("bar");
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setHeaders(
+                singletonList(
+                    ProduceRequestHeader.create("header-with-null", null)))
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    Header header = produced.headers().headers("header-with-null").iterator().next();
+    assertEquals("header-with-null", header.key());
+    assertNull(header.value());
+  }
+
+  @Test
+  public void produceBinaryWithManyHeaders() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    ByteString key = ByteString.copyFromUtf8("foo");
+    ByteString value = ByteString.copyFromUtf8("bar");
+    List<ProduceRequestHeader> headers = new ArrayList<>();
+    for (int i = 0; i < 50; i++) {
+      headers.add(
+          ProduceRequestHeader.create(
+              "header-" + i, ByteString.copyFromUtf8("value-" + i)));
+    }
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setHeaders(headers)
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    assertEquals(50, produced.headers().toArray().length);
+    for (int i = 0; i < 50; i++) {
+      assertEquals(
+          singletonList(
+              new RecordHeader(
+                  "header-" + i,
+                  ByteString.copyFromUtf8("value-" + i).toByteArray())),
+          ImmutableList.copyOf(produced.headers().headers("header-" + i)));
+    }
+  }
+
+  @Test
+  public void produceBinaryWithLargePayload() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    byte[] largeKeyBytes = new byte[10000];
+    byte[] largeValueBytes = new byte[100000];
+    Arrays.fill(largeKeyBytes, (byte) 'K');
+    Arrays.fill(largeValueBytes, (byte) 'V');
+    ByteString key = ByteString.copyFrom(largeKeyBytes);
+    ByteString value = ByteString.copyFrom(largeValueBytes);
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+  }
+
+  @Test
+  public void produceJsonSmallBatch() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    ArrayList<ProduceRequest> requests = new ArrayList<>();
+    for (int i = 0; i < 10; i++) {
+      requests.add(
+          ProduceRequest.builder()
+              .setKey(
+                  ProduceRequestData.builder()
+                      .setFormat(EmbeddedFormat.JSON)
+                      .setData(TextNode.valueOf("key-" + i))
+                      .build())
+              .setValue(
+                  ProduceRequestData.builder()
+                      .setFormat(EmbeddedFormat.JSON)
+                      .setData(TextNode.valueOf("value-" + i))
+                      .build())
+              .build());
+    }
+
+    StringBuilder batch = new StringBuilder();
+    ObjectMapper objectMapper = testEnv.kafkaRest().getObjectMapper();
+    for (ProduceRequest produceRequest : requests) {
+      batch.append(objectMapper.writeValueAsString(produceRequest));
+    }
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(batch.toString(), MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    List<ProduceResponse> actual = readProduceResponses(response);
+    assertEquals(10, actual.size());
+    KafkaJsonDeserializer<Object> deserializer = new KafkaJsonDeserializer<>();
+    deserializer.configure(emptyMap(), false);
+
+    for (int i = 0; i < 10; i++) {
+      ConsumerRecord<Object, Object> produced =
+          testEnv.kafkaCluster()
+              .getRecord(
+                  TOPIC_NAME,
+                  actual.get(i).getPartitionId(),
+                  actual.get(i).getOffset(),
+                  deserializer,
+                  deserializer);
+      assertEquals("key-" + i, produced.key());
+      assertEquals("value-" + i, produced.value());
+    }
+  }
+
+  @Test
+  public void produceBatchMixedValidAndInvalid() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    String validRequest =
+        "{\"key\":{\"type\":\"BINARY\",\"data\":\"Zm9v\"},"
+            + "\"value\":{\"type\":\"BINARY\",\"data\":\"YmFy\"}}";
+    String invalidRequest =
+        "{\"key\":{\"type\":\"BINARY\",\"data\":1},"
+            + "\"value\":{\"type\":\"BINARY\",\"data\":2}}";
+    String batch = validRequest + invalidRequest + validRequest;
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(batch, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    response.bufferEntity();
+    String body = response.readEntity(String.class);
+    ObjectMapper mapper = testEnv.kafkaRest().getObjectMapper();
+    MappingIterator<JsonNode> iter =
+        mapper.readerFor(JsonNode.class).readValues(body);
+    List<JsonNode> results = new ArrayList<>();
+    while (iter.hasNext()) {
+      results.add(iter.next());
+    }
+    assertEquals(3, results.size());
+    assertEquals(200, results.get(0).path("error_code").asInt(200));
+    assertEquals(400, results.get(1).path("error_code").asInt(200));
+    assertEquals(200, results.get(2).path("error_code").asInt(200));
+  }
+
+  @Test
+  public void produceAvroWithBackwardCompatibleSchemaEvolution() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    String schemaV1 =
+        "{\"type\":\"record\",\"name\":\"TestRecord\","
+            + "\"fields\":[{\"name\":\"field1\",\"type\":\"string\"}]}";
+    String schemaV2 =
+        "{\"type\":\"record\",\"name\":\"TestRecord\","
+            + "\"fields\":[{\"name\":\"field1\",\"type\":\"string\"},"
+            + "{\"name\":\"field2\",\"type\":[\"null\",\"string\"],\"default\":null}]}";
+
+    ObjectNode dataV1 = JsonNodeFactory.instance.objectNode();
+    dataV1.put("field1", "hello");
+    ProduceRequest requestV1 =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema(schemaV1)
+                    .setData(dataV1)
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema(schemaV1)
+                    .setData(dataV1)
+                    .build())
+            .build();
+
+    Response responseV1 =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(requestV1, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), responseV1.getStatus());
+    ProduceResponse actualV1 = readProduceResponse(responseV1);
+
+    ObjectNode dataV2 = JsonNodeFactory.instance.objectNode();
+    dataV2.put("field1", "world");
+    dataV2.putObject("field2").put("string", "extra");
+    ProduceRequest requestV2 =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema(schemaV2)
+                    .setData(dataV2)
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema(schemaV2)
+                    .setData(dataV2)
+                    .build())
+            .build();
+
+    Response responseV2 =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(requestV2, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), responseV2.getStatus());
+    ProduceResponse actualV2 = readProduceResponse(responseV2);
+
+    ConsumerRecord<Object, Object> producedV1 =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actualV1.getPartitionId(),
+                actualV1.getOffset(),
+                testEnv.schemaRegistry().createAvroDeserializer(),
+                testEnv.schemaRegistry().createAvroDeserializer());
+    GenericRecord keyV1 = (GenericRecord) producedV1.key();
+    assertEquals("hello", keyV1.get("field1").toString());
+
+    ConsumerRecord<Object, Object> producedV2 =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actualV2.getPartitionId(),
+                actualV2.getOffset(),
+                testEnv.schemaRegistry().createAvroDeserializer(),
+                testEnv.schemaRegistry().createAvroDeserializer());
+    GenericRecord keyV2 = (GenericRecord) producedV2.key();
+    assertEquals("world", keyV2.get("field1").toString());
+    assertEquals("extra", keyV2.get("field2").toString());
+  }
+
+  @Test
+  public void produceToNonExistentTopic_returnsBadRequest() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(ByteString.copyFromUtf8("foo").toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(ByteString.copyFromUtf8("bar").toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/nonexistent-topic/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ErrorResponse actual = response.readEntity(ErrorResponse.class);
+    assertEquals(40301, actual.getErrorCode());
+  }
+
+  @Test
+  public void produceWithInvalidClusterId_returnsNotFound() throws Exception {
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(ByteString.copyFromUtf8("foo").toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/invalid-cluster-id/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.NOT_FOUND.getStatusCode(), response.getStatus());
+  }
+
+  @Test
+  public void produceBinaryWithPartitionIdAndTimestampAndHeaders() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    int partitionId = 0;
+    Instant timestamp = Instant.ofEpochMilli(5000);
+    ByteString key = ByteString.copyFromUtf8("combo-key");
+    ByteString value = ByteString.copyFromUtf8("combo-value");
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setPartitionId(partitionId)
+            .setTimestamp(timestamp)
+            .setHeaders(
+                Arrays.asList(
+                    ProduceRequestHeader.create("h1", ByteString.copyFromUtf8("v1")),
+                    ProduceRequestHeader.create("h2", ByteString.copyFromUtf8("v2"))))
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(key.toByteArray()))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.BINARY)
+                    .setData(BinaryNode.valueOf(value.toByteArray()))
+                    .build())
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    assertEquals(partitionId, actual.getPartitionId());
+    ConsumerRecord<byte[], byte[]> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                partitionId,
+                actual.getOffset(),
+                new ByteArrayDeserializer(),
+                new ByteArrayDeserializer());
+    assertEquals(key, ByteString.copyFrom(produced.key()));
+    assertEquals(value, ByteString.copyFrom(produced.value()));
+    assertEquals(timestamp, Instant.ofEpochMilli(produced.timestamp()));
+    assertEquals(
+        singletonList(
+            new RecordHeader("h1", ByteString.copyFromUtf8("v1").toByteArray())),
+        ImmutableList.copyOf(produced.headers().headers("h1")));
+    assertEquals(
+        singletonList(
+            new RecordHeader("h2", ByteString.copyFromUtf8("v2").toByteArray())),
+        ImmutableList.copyOf(produced.headers().headers("h2")));
+  }
+
+  @Test
+  public void produceAvroWithTimestamp() throws Exception {
+    String clusterId = testEnv.kafkaCluster().getClusterId();
+    Instant timestamp = Instant.ofEpochMilli(2000);
+    String key = "foo";
+    String value = "bar";
+    ProduceRequest request =
+        ProduceRequest.builder()
+            .setKey(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema("{\"type\": \"string\"}")
+                    .setData(TextNode.valueOf(key))
+                    .build())
+            .setValue(
+                ProduceRequestData.builder()
+                    .setFormat(EmbeddedFormat.AVRO)
+                    .setRawSchema("{\"type\": \"string\"}")
+                    .setData(TextNode.valueOf(value))
+                    .build())
+            .setTimestamp(timestamp)
+            .build();
+
+    Response response =
+        testEnv.kafkaRest()
+            .target()
+            .path("/v3/clusters/" + clusterId + "/topics/" + TOPIC_NAME + "/records")
+            .request()
+            .accept(MediaType.APPLICATION_JSON)
+            .post(Entity.entity(request, MediaType.APPLICATION_JSON));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    ConsumerRecord<Object, Object> produced =
+        testEnv.kafkaCluster()
+            .getRecord(
+                TOPIC_NAME,
+                actual.getPartitionId(),
+                actual.getOffset(),
+                testEnv.schemaRegistry().createAvroDeserializer(),
+                testEnv.schemaRegistry().createAvroDeserializer());
+    assertEquals(key, produced.key());
+    assertEquals(value, produced.value());
+    assertEquals(timestamp, Instant.ofEpochMilli(produced.timestamp()));
   }
 
   private static ProduceResponse readProduceResponse(Response response) {

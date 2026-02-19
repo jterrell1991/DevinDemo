@@ -150,14 +150,24 @@ public final class KafkaClusterFixture extends ExternalResource {
       Deserializer<K> keyDeserializer,
       Deserializer<V> valueDeserializer) {
     KafkaConsumer<K, V> consumer = getConsumer(keyDeserializer, valueDeserializer);
-    consumer.assign(singletonList(new TopicPartition(topicName, partitionId)));
-    consumer.seek(new TopicPartition(topicName, partitionId), offset);
-    List<ConsumerRecord<K, V>> records =
-        consumer.poll(Duration.ofSeconds(1))
-            .records(new TopicPartition(topicName, partitionId));
-    ConsumerRecord<K, V> record = records.iterator().next();
+    TopicPartition tp = new TopicPartition(topicName, partitionId);
+    consumer.assign(singletonList(tp));
+    consumer.seek(tp, offset);
+    int maxAttempts = 10;
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      List<ConsumerRecord<K, V>> records = consumer.poll(Duration.ofSeconds(2)).records(tp);
+      if (!records.isEmpty()) {
+        ConsumerRecord<K, V> record = records.iterator().next();
+        consumer.close();
+        return record;
+      }
+      consumer.seek(tp, offset);
+    }
     consumer.close();
-    return record;
+    throw new AssertionError(
+        String.format(
+            "Record not found at topic=%s, partition=%d, offset=%d after %d attempts",
+            topicName, partitionId, offset, maxAttempts));
   }
 
   public void createTopic(String topicName, int numPartitions, short replicationFactor)

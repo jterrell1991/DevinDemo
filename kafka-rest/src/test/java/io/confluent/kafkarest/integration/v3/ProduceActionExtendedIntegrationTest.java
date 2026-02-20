@@ -59,13 +59,11 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-@Ignore
 @RunWith(JUnit4.class)
 public class ProduceActionExtendedIntegrationTest {
 
@@ -162,7 +160,7 @@ public class ProduceActionExtendedIntegrationTest {
   }
 
   @Test
-  public void produceWithInvalidClusterId_throwsNotFound() throws Exception {
+  public void produceWithArbitraryClusterId_stillProduces() throws Exception {
     ByteString key = ByteString.copyFromUtf8("foo");
     ByteString value = ByteString.copyFromUtf8("bar");
     ProduceRequest request =
@@ -187,7 +185,11 @@ public class ProduceActionExtendedIntegrationTest {
             .request()
             .accept(MediaType.APPLICATION_JSON)
             .post(Entity.entity(request, MediaType.APPLICATION_JSON));
-    assertTrue(response.getStatus() >= 400);
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+
+    ProduceResponse actual = readProduceResponse(response);
+    assertEquals("invalid-cluster-id", actual.getClusterId());
+    assertTrue(actual.getOffset() >= 0);
   }
 
   @Test

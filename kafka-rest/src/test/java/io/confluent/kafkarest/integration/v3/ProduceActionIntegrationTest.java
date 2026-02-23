@@ -67,15 +67,11 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-// TODO ddimitrov This continues being way too flaky.
-//  Until we fix it (KREST-1542), we should ignore it, as it might be hiding even worse errors.
-@Ignore
 @RunWith(JUnit4.class)
 public class ProduceActionIntegrationTest {
 
@@ -3074,10 +3070,10 @@ public class ProduceActionIntegrationTest {
         testEnv.schemaRegistry().getClient().getLatestSchemaMetadata(keySubject).getId();
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getLatestSchemaMetadata(valueSubject).getId();
-    assertEquals(keyRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(keySchemaId)
-        .canonicalString());
-    assertEquals(valueRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(valueSchemaId)
-        .canonicalString());
+    assertEquals(new AvroSchema(keyRawSchema).canonicalString(),
+        testEnv.schemaRegistry().getClient().getSchemaById(keySchemaId).canonicalString());
+    assertEquals(new AvroSchema(valueRawSchema).canonicalString(),
+        testEnv.schemaRegistry().getClient().getSchemaById(valueSchemaId).canonicalString());
   }
 
   @Test
@@ -3139,10 +3135,10 @@ public class ProduceActionIntegrationTest {
         testEnv.schemaRegistry().getClient().getLatestSchemaMetadata(keySubject).getId();
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getLatestSchemaMetadata(valueSubject).getId();
-    assertEquals(keyRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(keySchemaId)
-        .canonicalString());
-    assertEquals(valueRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(valueSchemaId)
-        .canonicalString());
+    assertEquals(new JsonSchema(keyRawSchema).canonicalString(),
+        testEnv.schemaRegistry().getClient().getSchemaById(keySchemaId).canonicalString());
+    assertEquals(new JsonSchema(valueRawSchema).canonicalString(),
+        testEnv.schemaRegistry().getClient().getSchemaById(valueSchemaId).canonicalString());
   }
 
   @Test
@@ -3622,7 +3618,11 @@ public class ProduceActionIntegrationTest {
     assertEquals(Status.OK.getStatusCode(), responseV1.getStatus());
     ProduceResponse actualV1 = readProduceResponse(responseV1);
 
-    // Schema V2: add "age" property (backward compatible addition)
+    // Set compatibility to NONE for JSON Schema evolution (JSON Schema backward compatibility
+    // does not allow adding properties without additional constraints)
+    testEnv.schemaRegistry().getClient().updateCompatibility(valueSubject, "NONE");
+
+    // Schema V2: add "age" property
     String schemaV2 =
         "{\"type\": \"object\", \"title\": \"EvolvingJson\", \"properties\": "
             + "{\"name\": {\"type\": \"string\"}, \"age\": {\"type\": \"integer\"}}}";

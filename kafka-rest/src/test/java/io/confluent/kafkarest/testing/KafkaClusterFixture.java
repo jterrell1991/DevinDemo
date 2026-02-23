@@ -150,14 +150,29 @@ public final class KafkaClusterFixture extends ExternalResource {
       Deserializer<K> keyDeserializer,
       Deserializer<V> valueDeserializer) {
     KafkaConsumer<K, V> consumer = getConsumer(keyDeserializer, valueDeserializer);
-    consumer.assign(singletonList(new TopicPartition(topicName, partitionId)));
-    consumer.seek(new TopicPartition(topicName, partitionId), offset);
-    List<ConsumerRecord<K, V>> records =
-        consumer.poll(Duration.ofSeconds(1))
-            .records(new TopicPartition(topicName, partitionId));
-    ConsumerRecord<K, V> record = records.iterator().next();
+    TopicPartition tp = new TopicPartition(topicName, partitionId);
+    consumer.assign(singletonList(tp));
+    consumer.seek(tp, offset);
+    // Retry polling up to 10 times with increasing timeout to avoid flaky failures
+    // when records are not yet replicated/available.
+    int maxAttempts = 10;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      List<ConsumerRecord<K, V>> records =
+          consumer.poll(Duration.ofSeconds(Math.min(attempt, 5)))
+              .records(tp);
+      if (!records.isEmpty()) {
+        ConsumerRecord<K, V> record = records.iterator().next();
+        consumer.close();
+        return record;
+      }
+      // Re-seek in case consumer position advanced past our target offset
+      consumer.seek(tp, offset);
+    }
     consumer.close();
-    return record;
+    throw new IllegalStateException(
+        String.format(
+            "Record not found at %s partition %d offset %d after %d attempts",
+            topicName, partitionId, offset, maxAttempts));
   }
 
   public void createTopic(String topicName, int numPartitions, short replicationFactor)
@@ -167,6 +182,34 @@ public final class KafkaClusterFixture extends ExternalResource {
         singletonList(new NewTopic(topicName, numPartitions, replicationFactor)))
         .all()
         .get();
+    // Wait for topic partitions to become available to avoid flaky producer failures
+    // (e.g. NotLeaderOrFollowerException) when tests immediately produce after creation.
+    waitForTopicReady(topicName, numPartitions);
+  }
+
+  private void waitForTopicReady(String topicName, int numPartitions) throws Exception {
+    checkState(adminClient != null);
+    int maxAttempts = 30;
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        java.util.Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.admin.OffsetSpec> request =
+            new java.util.HashMap<>();
+        for (int p = 0; p < numPartitions; p++) {
+          request.put(
+              new TopicPartition(topicName, p),
+              org.apache.kafka.clients.admin.OffsetSpec.earliest());
+        }
+        java.util.Map<org.apache.kafka.common.TopicPartition,
+            org.apache.kafka.clients.admin.ListOffsetsResult.ListOffsetsResultInfo> offsets =
+            adminClient.listOffsets(request).all().get();
+        if (offsets.size() == numPartitions) {
+          return;
+        }
+      } catch (Exception e) {
+        // Topic not ready yet, retry
+      }
+      Thread.sleep(200);
+    }
   }
 
   public static Builder builder() {

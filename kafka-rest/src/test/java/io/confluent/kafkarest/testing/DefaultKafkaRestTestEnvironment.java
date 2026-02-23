@@ -54,7 +54,7 @@ public final class DefaultKafkaRestTestEnvironment extends ExternalResource {
   private final KafkaRestFixture kafkaRest =
       KafkaRestFixture.builder()
           .setCertificates(certificates, "kafka-rest")
-          .setConfig("producer.max.block.ms", "5000")
+          .setConfig("producer.max.block.ms", "30000")
           .setConfig("ssl.client.authentication", "REQUIRED")
           .setKafkaCluster(kafkaCluster)
           .setKafkaUser("kafka-rest", "kafka-rest-pass")

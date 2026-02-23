@@ -53,11 +53,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
 import javax.ws.rs.ProcessingException;
 import javax.ws.rs.client.Entity;
 import javax.ws.rs.core.GenericType;
@@ -3143,6 +3140,8 @@ public class ProduceActionIntegrationTest {
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getLatestSchemaMetadata(valueSubject).getId();
     assertEquals(keyRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(keySchemaId)
+        .canonicalString());
+    assertEquals(valueRawSchema, testEnv.schemaRegistry().getClient().getSchemaById(valueSchemaId)
         .canonicalString());
   }
 

@@ -172,7 +172,12 @@ public final class KafkaBrokerFixture extends ExternalResource {
   public void after() {
     if (broker != null) {
       broker.shutdown();
+      broker.awaitShutdown();
     }
+    // Clean up Kafka Yammer metrics to prevent JMX MBean collisions
+    // (InstanceAlreadyExistsException) when brokers are restarted across tests.
+    kafka.metrics.KafkaYammerMetrics.defaultRegistry().allMetrics().keySet()
+        .forEach(kafka.metrics.KafkaYammerMetrics.defaultRegistry()::removeMetric);
     if (logDir != null) {
       try {
         Files.walk(logDir)

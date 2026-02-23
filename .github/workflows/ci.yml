@@ -25,5 +25,5 @@ jobs:
         run: mvn compile test-compile -pl kafka-rest -am -q
 
       - name: Run ProduceAction integration tests
-        run: mvn test -pl kafka-rest -Dtest="ProduceActionIntegrationTest" -DfailIfNoTests=false -Dsurefire.rerunFailingTestsCount=2
+        run: mvn test -pl kafka-rest -Dtest="ProduceActionIntegrationTest" -DfailIfNoTests=false -Dsurefire.rerunFailingTestsCount=2 -DreuseForks=false
         timeout-minutes: 20

@@ -19,6 +19,7 @@ import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MappingIterator;
@@ -3076,6 +3077,9 @@ public class ProduceActionIntegrationTest {
         testEnv.schemaRegistry().getClient().getId(keySubject, new AvroSchema(keyRawSchema));
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getId(valueSubject, new AvroSchema(valueRawSchema));
+    // Schema IDs should be positive integers indicating successful registration
+    assertTrue("Key schema ID should be positive", keySchemaId > 0);
+    assertTrue("Value schema ID should be positive", valueSchemaId > 0);
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(keySubject,
         new AvroSchema(keyRawSchema)));
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(valueSubject,
@@ -3142,6 +3146,8 @@ public class ProduceActionIntegrationTest {
         testEnv.schemaRegistry().getClient().getId(keySubject, new JsonSchema(keyRawSchema));
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getId(valueSubject, new JsonSchema(valueRawSchema));
+    assertTrue("Key schema ID should be positive", keySchemaId > 0);
+    assertTrue("Value schema ID should be positive", valueSchemaId > 0);
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(keySubject,
         new JsonSchema(keyRawSchema)));
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(valueSubject,
@@ -3216,6 +3222,8 @@ public class ProduceActionIntegrationTest {
         testEnv.schemaRegistry().getClient().getId(keySubject, keySchema);
     int valueSchemaId =
         testEnv.schemaRegistry().getClient().getId(valueSubject, valueSchema);
+    assertTrue("Key schema ID should be positive", keySchemaId > 0);
+    assertTrue("Value schema ID should be positive", valueSchemaId > 0);
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(keySubject, keySchema));
     assertEquals(1, testEnv.schemaRegistry().getClient().getVersion(valueSubject, valueSchema));
   }
